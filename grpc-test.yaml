@@ -1,0 +1,160 @@
+# Kubernetes Namespace for gRPC server
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: grpc-server-test
+  # labels:
+  #   istio-injection: enabled
+---
+# Kubernetes Service for gRPC server
+apiVersion: v1
+kind: Service
+metadata:
+  name: grpc-server
+  namespace: grpc-server-test
+  labels:
+    app: grpc-server
+spec:
+  selector:
+    app: grpc-server
+  ports:
+  - protocol: TCP
+    name: grpc-server
+    port: 50053
+    targetPort: 9091 
+---
+# Istio Virtual Service
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: grpc-vs
+  namespace: grpc-server-test
+  labels:
+    app: grpc-server
+spec:
+  hosts:
+  - grpc-server.dev-cluster.xxx.xxxx.xx.com
+  gateways:
+  - istio-system/default-gateway
+  http:
+  - match:
+    - uri:
+        prefix: /
+    route:
+    - destination:
+        host: grpc-server
+        port:
+          number: 50053
+---
+# Certificate for gRPC server
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: grpc-server-certificate
+  namespace: grpc-server-test
+spec:
+  secretName: grpc-server-tls
+  issuerRef:
+    name: acm-root-ca
+    kind: AWSPCAClusterIssuer
+    group: awspca.cert-manager.io
+  dnsNames:
+  - grpc-server.dev-cluster.xxx.xxxx.xx.com
+  usages:
+  - server auth
+---
+# Kubernetes Deployment for gRPC server
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grpc-server
+  namespace: grpc-server-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grpc-server
+  template:
+    metadata:
+      labels:
+        app: grpc-server
+    spec:
+      containers:
+      - name: grpc-server
+        image: xxxxxxxxx.dkr.ecr.us-west-2.amazonaws.com/grpc-server:latest
+        env:
+          - name: SERVER_TLS_ENABLED
+            value: "false"
+        ports:
+        - containerPort: 9091
+        # readinessProbe:
+        #   exec:
+        #     command: ["/bin/grpc_health_probe", "-addr=:9091"]
+        #   initialDelaySeconds: 5
+        #   periodSeconds: 10
+        # livenessProbe:
+        #   exec:
+        #     command: ["/bin/grpc_health_probe", "-addr=:9091"]
+        #   initialDelaySeconds: 15
+        #   periodSeconds: 20
+        volumeMounts:
+        - name: tls
+          mountPath: /etc/tls
+          readOnly: true
+      volumes:
+      - name: tls
+        secret:
+          secretName: grpc-server-tls
+---
+# Kubernetes Deployment for grpcurl pod
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grpcurl-pod
+  namespace: grpc-server-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grpcurl-pod
+  template:
+    metadata:
+      labels:
+        app: grpcurl-pod
+    spec:
+      containers:
+      - name: grpcurl-pod
+        image: alpine
+        command: ["/bin/sh"]
+        args: ["-c", "apk add --no-cache curl && wget https://github.com/fullstorydev/grpcurl/releases/download/v1.8.1/grpcurl_1.8.1_linux_x86_64.tar.gz && tar -xvzf grpcurl_1.8.1_linux_x86_64.tar.gz && mv grpcurl /usr/bin/ && while true; do sleep 30; done;"]
+        volumeMounts:
+        - name: tls
+          mountPath: /etc/tls
+          readOnly: true
+      volumes:
+      - name: tls
+        secret:
+          secretName: grpc-server-tls
+# ---
+# apiVersion: networking.istio.io/v1beta1
+# kind: DestinationRule
+# metadata:
+#   name: grpc-server
+#   namespace: grpc-server-test
+# spec:
+#   host: grpc-server.grpc-server-test.svc.cluster.local
+#   trafficPolicy:
+#     tls:
+#       mode: MUTUAL
+#       clientCertificate: /etc/tls/tls.crt
+#       privateKey: /etc/tls/tls.key
+#       caCertificates: /etc/tls/ca.crt
+# ---
+# apiVersion: security.istio.io/v1beta1
+# kind: PeerAuthentication
+# metadata:
+#   name: grpc-server
+#   namespace: grpc-server-test
+# spec:
+#   mtls:
+#     mode: STRICT
